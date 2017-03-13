@@ -2,61 +2,90 @@ options(scipen=999)
 library(dplyr)
 library(tidyr)
 
-#set working directory
+# set working directory
 setwd("C:/Users/Jevon/Desktop/School/Project/Data")
 
 # read input data
 Initial_data <- read.table("baci92_2014.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
-Countries <- read.table("country_code_baci92.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+Markets <- read.table("country_code_baci92.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
 Products <- read.table("product_code_baci92.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
 
-# summarise emp by msa and naics
-Data <- Initial_data %>% group_by(i, hs6) %>% summarise(v=sum(v))
+## THIS CODE IS ONLY SPECIFIC TO BACI DATA
+# convert HS6 to HS4 (Many emerging markets do not report to 6 digits)
+Initial_data$hs4 <- substr(Initial_data$hs6,1,nchar(Initial_data$hs6)-2)
+## END BACI-SPECIFIC CODE
 
-# add country column
-# Data <- Data %>% left_join(Countries, by=c("i"="i"))
+# summarise input data by products, markets, and quantifying data
+Data <- Initial_data %>% group_by(i, hs4) %>% summarise(v=sum(v))
 
-#summarise trade value by country and product separately
-DataCountryTotal <- Initial_data %>% group_by(i) %>% summarise(country_v=sum(v))
-DataProductTotal <- Initial_data %>% group_by(hs6) %>% summarise(product_v=sum(v))
+# rename columns on Data
+colnames(Data) <- c("Market", "Product", "Quantity")
 
-# calculate total sum of emp
-GrandTotal <- sum(DataProductTotal$product_v)
+# summarise trade value by country and product separately
+DataMarketTotal <- Data %>% group_by(Market) %>% summarise(MarketTotal=sum(Quantity))
+DataProductTotal <- Data %>% group_by(Product) %>% summarise(ProductTotal=sum(Quantity))
+
+# calculate total sum of quantity
+GrandTotal <- sum(DataProductTotal$ProductTotal)
 
 # create data frame for calculating RCA, Diversity (KC0), and Ubiquity (KP0)
 Calc1 <- Data
-Calc1 <- Calc1 %>% left_join(DataCountryTotal, by=c("i"="i"))
-Calc1 <- Calc1 %>% left_join(DataProductTotal, by=c("hs6"="hs6"))
+Calc1 <- Calc1 %>% left_join(DataMarketTotal, by=c("Market"="Market"))
+Calc1 <- Calc1 %>% left_join(DataProductTotal, by=c("Product"="Product"))
 
 # Calculate Relative Comparative Advantage (RCA)
-Calc1$RCA <- (Calc1$v/Calc1$country_v)/(Calc1$product_v/GrandTotal)
+Calc1$RCA <- (Calc1$Quantity/Calc1$MarketTotal)/(Calc1$ProductTotal/GrandTotal)
 Calc1$RCA[is.na(Calc1$RCA)] <- 0
-Calc1$v <- Calc1$country_v <- Calc1$product_v <- NULL
+Calc1$Quantity <- Calc1$MarketTotal <- Calc1$ProductTotal <- NULL
 
-# Convert RCA to Binary Analysis, using 0.75 as threshhold
+# Convert RCA to Binary Analysis, using 0.75 as threshhold. Create Calc2 to preserve RCA in Calc1.
 Calc2 <- Calc1
 Calc2$Binary <- ifelse(Calc1$RCA>0.75, 1, 0)
 Calc2$RCA <- NULL # Removing this row reduces file size, which is necessary later
 
-# Save KP0 in order to calculate Proximity and Distance
-KP0 <- Calc2 %>% group_by(hs6) %>% summarise(ProductCount = sum(Binary))
+## This section creates Proximity
 
-# Calculate Number of Areas with Both Products
+# Save KP0 in order to calculate Proximity
+KP0 <- Calc2 %>% group_by(Product) %>% summarise(ProductCount = sum(Binary))
+Calc2 <- Calc2 %>% ungroup() # This fixes a bug. Somehow the line above created a problem.
 
-KPand <- function(Calc2){
-    combs  <- combn(unique(Calc2$hs6),2)
-    mkts   <- unique(as.vector(Calc2$i))
-    counts <- rep(0,nrow(combs))
-    for(j in 1:ncol(combs)){
-        for(i in seq_along(mkts)){
-            counts[j] <- counts[j] + (sum(Calc2[Calc2$i==mkts[i] & Calc2$hs6 %in% combs[,j], 'Binary'])==2)
-        }
-    }
-    rbind(combs,counts)
-}
+# prepare matrix for calculation
+Calc2_matrix <- spread(Calc2, Product, Binary, fill=0)
+row.names(Calc2_matrix) <- Calc2_matrix$Market
+Calc2_matrix$Market <- NULL
+Calc2_matrix <- as.matrix(Calc2_matrix)
+
+# calculate number of markets for all combinations with market multiplication
+combs_matrix <- t(Calc2_matrix)%*%Calc2_matrix
+
+# convert matrix to data.frame (long format)
+combs_matrix <- as.data.frame(combs_matrix)
+combs_matrix$product1 <- rownames(combs_matrix)
+combs <- gather(combs_matrix, product2, comb, -product1)
+
+# remove duplicated records
+combs <- combs[combs$product1 < combs$product2, ]
+
+# calcuate max number of markets and proximity
+products_number_of_markets <- colSums(Calc2_matrix)
+combs$n1 <- products_number_of_markets[as.character(combs$product1)]
+combs$n2 <- products_number_of_markets[as.character(combs$product2)]
+combs$max <- pmax(combs$n1, combs$n2)
+combs$prox <- combs$comb/combs$max
+
+# remove unnecessary columns
+combs$n1 <- combs$n2 <- NULL
+combs$product1 <- as.integer(combs$product1)
+combs$product2 <- as.integer(combs$product2)
+
+# resort matrix by product1 column
+combs <- combs[order(combs$product1),]
+
+## Proximity section ends. Return to calculating ECI/PCI.
+
 
 # convert Calc2 to wide format
-Calc2 <- spread(Calc2, hs6, Binary, fill=0)
+Calc2 <- spread(Calc2, Product, Binary, fill=0)
 
 # create data frame for KP0 and KC0
 KP0andKC0 <- Calc2
@@ -67,7 +96,7 @@ KPn_minus2 <- KPn_prev
 KCn_prev <- apply(KP0andKC0[, 2:ncol(KP0andKC0)], 1, sum)
 KCn_minus2 <- KCn_prev
 
-#run loop
+#run loop ## eigenvector command instead, use p.24 of the doc sent by Mohammed
 count <- 0
 while (count<50) { # max number of times
   count <- count+1
@@ -97,13 +126,14 @@ while (count<50) { # max number of times
 print(paste0("Calculation was done ", count, " times"))
 
 # create ECI table
-ECI <- Calc1[, 1:1]
+ECI <- Calc2[, 1:1]
 ECI$KC <- KCn
 ECI$ECI <- (ECI$KC-mean(ECI$KC))/sd(ECI$KC)
-ECI <- ECI %>% left_join(Countries, by="i")
+ECI$Market <- as.integer()
+ECI <- merge(ECI, Markets, by.x = "Market", by.y = "i")
 
 # create PCI table
-PCI <- data.frame(product=colnames(Calc1[2:ncol(Calc1)]), stringsAsFactors=FALSE)
+PCI <- data.frame(product=colnames(Calc2[2:ncol(Calc2)]), stringsAsFactors=FALSE)
 PCI$KP <- KPn
 PCI$PCI <- (PCI$KP-mean(PCI$KP))/sd(PCI$KP)
 PCI$PCI <- PCI$PCI * -1
@@ -116,4 +146,3 @@ PCI <- PCI %>% left_join(Products, by=c("product"="CODE"))
 
 # write ECI and PCI to a CSV for export
 write.csv(ECI, "ECI.csv")
-write.csv(PCI, "PCI.csv")
