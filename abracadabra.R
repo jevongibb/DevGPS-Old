@@ -7,7 +7,7 @@ library(dplyr)
 # load tidyr package for formatting functionality (like spread function)
 library(tidyr)
 
-# set working directory (Modified code to allow user to choose working directory)
+# set working directory
 setwd("C:/Users/Jevon/Desktop/School/Project/Data")
 
 # read input data
@@ -101,16 +101,13 @@ MCentrality <- Template
 MCentrality[, 2:ncol(MCentrality)] <- sweep(Template[, 2:ncol(Template)], 2, PCentrality$PCentrality, '*')
 MCentrality <- apply(MCentrality[, 2:ncol(MCentrality)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
 
-# calculate Market Clustering
+# calculate Market Clustering - This calculation does not do what I wanted it to do. Must replace.
 Clustering <- sapply(Markets$i, function(market_num) {
   market_products <- Calc2$Product[Calc2$Market==market_num & Calc2$Binary==1]
   market_combs <- combs[combs$product1 %in% market_products & combs$product2 %in% market_products, ]
   mean(market_combs$prox)
 })
 Clustering <- data.frame(Market=Markets$i, Clustering=Clustering)
-
-?dist
-
 
 # combine Market Diversity, Market Centrality, and Market Clustering
 MarketData <- KC0
@@ -124,7 +121,9 @@ MarketData$ClusteringScaled <- scale(MarketData$Clustering)
 MarketData$MCentralityScaled <- scale(MarketData$MCentrality)
 
 # Add GDP Per Capita data to the Markets
-MarketData <- merge(MarketData, GDP, by.x = "Market", by.y = "Code")
+#MarketData <- merge(MarketData, GDP, by.x = "Market", by.y = "Code")
+MarketData <- left_join(MarketData, GDP, by=c("Market"="Code"))
+
 
 # here, need to insert a regression. Y-axis is Log GDP Per Capita, X-axis is factors below. I conducted this externally. Needs to account for NA values.
 reg_model <- lm(Log_GDP ~ DiversityScaled+ClusteringScaled+MCentralityScaled, data=MarketData[complete.cases(MarketData), ])
@@ -133,12 +132,12 @@ summary(reg_model)
 # apply coefficients from regression to create a single variable called Network
 
 
-# CentralityFactor <- 0.249386559
-# DiversityFactor <- 0.072504321
+CentralityFactor <- 0.17840
+DiversityFactor <- 0.09422
 # ClusteringFactor <- -0.082085434
-coef(reg_model)
+#coef(reg_model)
 
-# MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$MCentralityScaled * CentralityFactor + MarketData$ClusteringScaled * ClusteringFactor
+MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$MCentralityScaled * CentralityFactor
 MarketData$Network <- predict(reg_model, MarketData)
 
 ## Diversity, Centrality, Clustering section ends.
@@ -155,7 +154,7 @@ KCn_minus2 <- MarketData$Network
 
 #run loop ## still trying to understand eigenvector alternative
 count <- 1
-while (count<50) { # max number of times
+while (count<15) { # max number of times
   
   # calculate KD(n)
   KPn <- Template
@@ -164,10 +163,10 @@ while (count<50) { # max number of times
   if (count==1) KPn_minus2 <- KPn
   
   # stop loop if delta in all KCn and KDn (for even iterations) has become less than 1
-  if (count %% 2 == 0) {
-    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
-    KCn_minus2 <- KCn
-    KDn_minus2 <- KPn
+#  if (count %% 2 == 0) {
+ #   if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
+  #  KCn_minus2 <- KCn
+   # KDn_minus2 <- KPn
   }
   
   # set new values to be previous in new loop
