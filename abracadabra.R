@@ -1,5 +1,10 @@
+# turn off scientific notation
 options(scipen=999)
+
+# load dplyr package for data manipulation functionality (matrix math)
 library(dplyr)
+
+# load tidyr package for formatting functionality (like spread function)
 library(tidyr)
 
 # set working directory
@@ -42,12 +47,10 @@ Calc2$RCA <- NULL # Removing this row reduces file size, which is necessary late
 KC0 <- Calc2 %>% group_by(Market) %>% summarise(Count = sum(Binary))
 KP0 <- Calc2 %>% group_by(Product) %>% summarise(ProductCount = sum(Binary))
 
-
-
 ## This section creates Proximity and Density
 Calc2 <- Calc2 %>% ungroup() # This fixes a bug. Somehow the section above created a problem.
 
-# prepare matrix for calculation
+# prepare matrix for proximity calculation
 Calc2_matrix <- spread(Calc2, Product, Binary, fill=0)
 row.names(Calc2_matrix) <- Calc2_matrix$Market
 Calc2_matrix$Market <- NULL
@@ -76,25 +79,33 @@ combs$n1 <- combs$n2 <- NULL
 combs$product1 <- as.integer(combs$product1)
 combs$product2 <- as.integer(combs$product2)
 
-# resort matrix by product1 column
-combs <- combs[order(combs$product1),]
+# duplicate combinations
+combs2 <- combs
+combs2$product1 <- combs$product2
+combs2$product2 <- combs$product1
+
+## CODE BREAKS HERE
+combs2 <- rbind(combs, combs2)
+##
+
+
+# sort matrix by product1 column
+combs2 <- combs2[order(combs2$product1),]
 
 # convert Proximity to Density
-Density <- combs %>% group_by(product1) %>% summarise(Density=mean(prox))
+Density <- combs2 %>% group_by(product1) %>% summarise(Density=mean(prox))
 
-## Proximity section ends. Return to calculating ECI/PCI.
+## Proximity section ends.
+## Return to calculating Economic Network Index and Product Network Index.
 
 # create matrix template for below
 Template <- spread(Calc2, Product, Binary, fill=0)
 
-# save KP0 and KC0 for calculations below ## I WILL NOT USE KP0 FOR THIS VERSION
-KPn_prev <- KP0
-KPn_minus2 <- KP0
-KCn_prev <- KC0
-KCn_minus2 <- KC0
-
-
-## NEED HELP FROM HERE DOWN
+# save KD0 and KC0 for calculations below
+KDn_prev <- Density$Product1
+KDn_minus2 <- Density$Product1
+KCn_prev <- KC0$Count
+KCn_minus2 <- KC0$Count
 
 #run loop ## consider eigenvector command instead, use p.24 of the doc sent by Mohammed
 count <- 0
@@ -103,46 +114,47 @@ while (count<50) { # max number of times
   
   # calculate KC(n)
   KCn <- Template
-  KCn[, 2:ncol(KCn)] <- sweep(Template[, 2:ncol(Template)], 2, Density, `*`)
+  KCn[, 2:ncol(KCn)] <- sweep(Template[, 2:ncol(Template)], 2, KDn_prev, `*`)
   KCn <- apply(KCn[, 2:ncol(KCn)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
   
-  # calculate KP(n)
-  KPn <- KP0andKC0
-  KPn[, 2:ncol(KPn)] <- sweep(KP0andKC0[, 2:ncol(KP0andKC0)], 1, KCn_prev, `*`)
-  KPn <- apply(KPn[, 2:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+  # calculate KD(n)
+  KDn <- Template
+  KDn[, 2:ncol(KDn)] <- sweep(Template[, 2:ncol(Template)], 1, KCn_prev, `*`)
+  KDn <- apply(KDn[, 2:ncol(KDn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
   
-  # stop loop if delta in all KCn and KPn (for even iterations) has become less than 1
+  # stop loop if delta in all KCn and KDn (for even iterations) has become less than 1
   if (count %% 2 == 0) {
-    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
-    KCn_minus2 <- KCn
+    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KDn-KDn_minus2)<1)) break 
+    KDn_minus2 <- KDn
     KPn_minus2 <- KPn
   }
     
   # set new values to be previous in new loop (only when KC & KP = even)
-  KCn_prev <- KCn
+  KDn_prev <- KDn
   KPn_prev <- KPn
 
 }
 print(paste0("Calculation was done ", count, " times"))
 
-# create ECI table
-ECI <- Calc2[, 1:1]
-ECI$KC <- KCn
-ECI$ECI <- (ECI$KC-mean(ECI$KC))/sd(ECI$KC)
-ECI$Market <- as.integer(ECI$Market)
-ECI <- merge(ECI, Markets, by.x = "Market", by.y = "i")
+
+# create ENI table
+ENI <- Calc2[, 1:1]
+ENI$KC <- KCn
+ENI$ENI <- (ENI$KC-mean(ENI$KC))/sd(ENI$KC)
+ENI$Market <- as.integer(ENI$Market)
+ENI <- merge(ENI, Markets, by.x = "Market", by.y = "i")
 
 # create PCI table
-PCI <- data.frame(product=colnames(Calc2[2:ncol(Calc2)]), stringsAsFactors=FALSE)
-PCI$KP <- KPn
-PCI$PCI <- (PCI$KP-mean(PCI$KP))/sd(PCI$KP)
-PCI$PCI <- PCI$PCI * -1
+PNI <- data.frame(product=colnames(Calc2[2:ncol(Calc2)]), stringsAsFactors=FALSE)
+PNI$KD <- KDn
+PNI$PNI <- (PNI$KD-mean(PNI$KD))/sd(PNI$KD)
+## No longer makes sense. PNI$PNI <- PCI$PCI * -1
 
 # convert product column to an integer in order to modify for uniformity
-PCI$product <- as.integer(PCI$product)
-PCI$product <- formatC(PCI$product, width = 4, format = "d", flag = "0")
+PNI$product <- as.integer(PNI$product)
+PNI$product <- formatC(PNI$product, width = 6, format = "d", flag = "0")
 
-PCI <- semi_join(PCI, Products2, by=c("product"="CODE"))
+PNI <- semi_join(PNI, Products2, by=c("product"="CODE"))
 
 # write ECI and PCI to a CSV for export
 write.csv(ECI, "ECI.csv")
