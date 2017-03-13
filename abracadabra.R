@@ -9,17 +9,24 @@ library(tidyr)
 
 # set working directory (Modified code to allow user to choose working directory)
 setwd("C:/Users/Jevon/Desktop/School/Project/Data")
+##dir <- choose.dir(getwd(), "Select your working directory")
+##setwd(dir)
 
 # read input data
 Initial_data <- read.table("baci92_2014.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
 Markets <- read.table("country_code_baci92.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
 Products <- read.table("product_code_baci92.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+GDP <- read.table("GDPPerCapita.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
 
 # summarise input data by products, markets, and quantifying data
 Data <- Initial_data %>% group_by(i, hs6) %>% summarise(v=sum(v))
 
 # rename columns on Data
 colnames(Data) <- c("Market", "Product", "Quantity")
+
+# modify GDP data
+colnames(GDP) <- c("Code", "Country", "GDP")
+GDP$Log_GDP <- log10(GDP$GDP)
 
 # summarise trade value by country and product separately
 DataMarketTotal <- Data %>% group_by(Market) %>% summarise(MarketTotal=sum(Quantity))
@@ -110,40 +117,63 @@ colnames(MarketData) <- c("Market", "Diversity")
 MarketData <- left_join(MarketData, Clustering, by="Market")
 MarketData$MCentrality <- MCentrality
 
+# Scale the MarketData
+MarketData$DiversityScaled <- scale(MarketData$Diversity)
+MarketData$ClusteringScaled <- scale(MarketData$Clustering)
+MarketData$MCentralityScaled <- scale(MarketData$MCentrality)
+
+# Add GDP Per Capita data to the Markets
+MarketData <- merge(MarketData, GDP, by.x = "Market", by.y = "Code")
+
+# here, need to insert a regression. Y-axis is Log GDP Per Capita, X-axis is factors below. I conducted this externally. Needs to account for NA values.
+
+
+# apply coefficients from regression to create a single variable called Network
+CentralityFactor <- 0.249386559
+DiversityFactor <- 0.072504321
+ClusteringFactor <- -0.082085434
+
+MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$MCentralityScaled * CentralityFactor + MarketData$ClusteringScaled * ClusteringFactor
+
+
 ## Diversity, Centrality, Clustering section ends.
 ## Return to calculating Economic Network Index and Product Network Index.
 
 # save KD0 and KC0 for calculations below
-KDn_prev <- Density$Density
-KDn_minus2 <- Density$Density
-KCn_prev <- KC0$Count
-KCn_minus2 <- KC0$Count
+# KDn_prev <- Density$Density
+# KDn_minus2 <- Density$Density
+# KCn_prev <- KC0$Count
+# KCn_minus2 <- KC0$Count
+KCn <- MarketData$Network
+
 
 #run loop ## still trying to understand eigenvector alternative
-count <- 0
+count <- 1
 while (count<50) { # max number of times
+  
+  # calculate KD(n)
+  KPn <- Template
+  KPn[, 2:ncol(KPn)] <- sweep(Template[, 2:ncol(Template)], 1, KCn, `*`)
+  KPn <- apply(KPn[, 2:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+  
+  # stop loop if delta in all KCn and KDn (for even iterations) has become less than 1
+  if (count %% 2 == 0) {
+    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
+    KCn_minus2 <- KCn
+    KDn_minus2 <- KPn
+
+  }
+  
+  # set new values to be previous in new loop
+  KCn_prev <- KCn
+  KPn_prev <- KPn
+      
   count <- count+1
   
   # calculate KC(n)
   KCn <- Template
-  KCn[, 2:ncol(KCn)] <- sweep(Template[, 2:ncol(Template)], 2, KDn_prev, `*`)
+  KCn[, 2:ncol(KCn)] <- sweep(Template[, 2:ncol(Template)], 2, KPn, `*`)
   KCn <- apply(KCn[, 2:ncol(KCn)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
-  
-  # calculate KD(n)
-  KDn <- Template
-  KDn[, 2:ncol(KDn)] <- sweep(Template[, 2:ncol(Template)], 1, KCn_prev, `*`)
-  KDn <- apply(KDn[, 2:ncol(KDn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
-  
-  # stop loop if delta in all KCn and KDn (for even iterations) has become less than 1
-  if (count %% 2 == 0) {
-    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KDn-KDn_minus2)<1)) break 
-    KCn_minus2 <- KCn
-    KDn_minus2 <- KDn
-  }
-    
-  # set new values to be previous in new loop
-  KCn_prev <- KCn
-  KDn_prev <- KDn
 
 }
 print(paste0("Calculation was done ", count, " times"))
@@ -152,15 +182,15 @@ print(paste0("Calculation was done ", count, " times"))
 # create ENI table
 ENI <- Template[, 1:1]
 ENI$KC <- KCn
-ENI$ENI <- (ENI$KC-mean(ENI$KC))/sd(ENI$KC)
+ENI$ENI <- scale(KCn) #(ENI$KC-mean(ENI$KC))/sd(ENI$KC)
 ENI$Market <- as.integer(ENI$Market)
 ENI <- merge(ENI, Markets, by.x = "Market", by.y = "i")
 
 # create PCI table
 PNI <- data.frame(product=colnames(Template[2:ncol(Template)]), stringsAsFactors=FALSE)
-PNI$KD <- KDn
-PNI$PNI <- (PNI$KD-mean(PNI$KD))/sd(PNI$KD)
-## No longer makes sense. PNI$PNI <- PCI$PCI * -1
+PNI$KP <- KPn
+PNI$PNI <- scale(KPn) #(PNI$KD-mean(PNI$KD))/sd(PNI$KD)
+
 
 # convert product column to an integer in order to modify for uniformity
 PNI$product <- as.integer(PNI$product)
@@ -171,3 +201,6 @@ PNI <- left_join(PNI, Products, by=c("product"="CODE"))
 # write ECI and PCI to a CSV for export
 write.csv(ENI, "ENI.csv")
 write.csv(PNI, "PNI.csv")
+
+
+# insert a new regression. Y-axis is Log GDP Per Capita, X-axis is ENI.
