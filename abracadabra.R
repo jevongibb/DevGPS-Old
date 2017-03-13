@@ -89,25 +89,30 @@ combs$n1 <- combs$n2 <- NULL
 combs$product1 <- as.integer(combs$product1)
 combs$product2 <- as.integer(combs$product2)
 
-# calculate Product Centrality
+# calculate Product Centrality (sum of all prox / number of products)
 PCentrality <- rbind(combs %>% group_by(product1) %>% summarise(PCentrality=sum(prox)),
 combs %>% group_by(product2) %>% summarise(PCentrality=sum(prox)) %>% rename(product1=product2)) %>%
 group_by(product1) %>% summarise(PCentrality=sum(PCentrality)) %>% ungroup()
 PCentrality$PCentrality <- PCentrality$PCentrality/(nrow(PCentrality)-1)
 colnames(PCentrality) <- c("Product", "PCentrality")
 
-# calculate Market Centrality
+# calculate Market Centrality (multiply PCentrality by RCA)
 MCentrality <- Template
 MCentrality[, 2:ncol(MCentrality)] <- sweep(Template[, 2:ncol(Template)], 2, PCentrality$PCentrality, '*')
 MCentrality <- apply(MCentrality[, 2:ncol(MCentrality)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
 
-# calculate Market Clustering - This calculation does not do what I wanted it to do. Must replace.
-Clustering <- sapply(Markets$i, function(market_num) {
-  market_products <- Calc2$Product[Calc2$Market==market_num & Calc2$Binary==1]
-  market_combs <- combs[combs$product1 %in% market_products & combs$product2 %in% market_products, ]
-  mean(market_combs$prox)
-})
-Clustering <- data.frame(Market=Markets$i, Clustering=Clustering)
+# calculate Product Clustering (by product, number of products with prox > average)
+aveProx <- mean(combs$prox)
+PClustering <- rbind(combs %>% group_by(product1) %>% summarise(PClustering=sum(prox > aveProx)),
+combs %>% group_by(product2) %>% summarise(PClustering=sum(prox > aveProx)) %>% rename(product1=product2)) %>%
+group_by(product1) %>% summarise(PClustering=sum(PClustering)) %>% ungroup()
+PClustering$PClustering <- scale(PClustering$PClustering)
+colnames(PCentrality) <- c("Product", "PClustering")
+
+# calculate Market Clustering (multiply PClustering by RCA)
+MClustering <- Template
+MClustering[, 2:ncol(MClustering)] <- sweep(Template[, 2:ncol(Template)], 2, PClustering$PClustering, '*')
+MClustering <- apply(MClustering[, 2:ncol(MClustering)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
 
 # combine Market Diversity, Market Centrality, and Market Clustering
 MarketData <- KC0
@@ -116,14 +121,13 @@ MarketData <- left_join(MarketData, Clustering, by="Market")
 MarketData$MCentrality <- MCentrality
 
 # Scale the MarketData
-MarketData$DiversityScaled <- scale(MarketData$Diversity)
-MarketData$ClusteringScaled <- scale(MarketData$Clustering)
-MarketData$MCentralityScaled <- scale(MarketData$MCentrality)
+MarketData$DiversityScaled <- c(scale(MarketData$Diversity))
+MarketData$ClusteringScaled <- c(scale(MarketData$Clustering))
+MarketData$MCentralityScaled <- c(scale(MarketData$MCentrality))
 
 # Add GDP Per Capita data to the Markets
 #MarketData <- merge(MarketData, GDP, by.x = "Market", by.y = "Code")
 MarketData <- left_join(MarketData, GDP, by=c("Market"="Code"))
-
 
 # here, need to insert a regression. Y-axis is Log GDP Per Capita, X-axis is factors below. I conducted this externally. Needs to account for NA values.
 reg_model <- lm(Log_GDP ~ DiversityScaled+ClusteringScaled+MCentralityScaled, data=MarketData[complete.cases(MarketData), ])
@@ -132,12 +136,12 @@ summary(reg_model)
 # apply coefficients from regression to create a single variable called Network
 
 
-CentralityFactor <- 0.17840
-DiversityFactor <- 0.09422
+# CentralityFactor <- 0.249386559
+# DiversityFactor <- 0.072504321
 # ClusteringFactor <- -0.082085434
-#coef(reg_model)
+coef(reg_model)
 
-MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$MCentralityScaled * CentralityFactor
+# MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$MCentralityScaled * CentralityFactor + MarketData$ClusteringScaled * ClusteringFactor
 MarketData$Network <- predict(reg_model, MarketData)
 
 ## Diversity, Centrality, Clustering section ends.
@@ -149,12 +153,13 @@ MarketData$Network <- predict(reg_model, MarketData)
 # KCn_prev <- KC0$Count
 # KCn_minus2 <- KC0$Count
 KCn <- MarketData$Network
-KCn_minus2 <- MarketData$Network
+KCn[is.na(KCn)] <- 0
+KCn_minus2 <- KCn
 
 
 #run loop ## still trying to understand eigenvector alternative
 count <- 1
-while (count<15) { # max number of times
+while (count<50) { # max number of times
   
   # calculate KD(n)
   KPn <- Template
@@ -163,10 +168,10 @@ while (count<15) { # max number of times
   if (count==1) KPn_minus2 <- KPn
   
   # stop loop if delta in all KCn and KDn (for even iterations) has become less than 1
-#  if (count %% 2 == 0) {
- #   if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
-  #  KCn_minus2 <- KCn
-   # KDn_minus2 <- KPn
+  if (count %% 2 == 0) {
+    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
+    KCn_minus2 <- KCn
+    KDn_minus2 <- KPn
   }
   
   # set new values to be previous in new loop
@@ -187,14 +192,14 @@ print(paste0("Calculation was done ", count, " times"))
 # create ENI table
 ENI <- Template[, 1:1]
 ENI$KC <- KCn
-ENI$ENI <- scale(KCn) #(ENI$KC-mean(ENI$KC))/sd(ENI$KC)
+ENI$ENI <- c(scale(KCn)) #(ENI$KC-mean(ENI$KC))/sd(ENI$KC)
 ENI$Market <- as.integer(ENI$Market)
 ENI <- merge(ENI, Markets, by.x = "Market", by.y = "i")
 
 # create PCI table
 PNI <- data.frame(product=colnames(Template[2:ncol(Template)]), stringsAsFactors=FALSE)
 PNI$KP <- KPn
-PNI$PNI <- scale(KPn) #(PNI$KD-mean(PNI$KD))/sd(PNI$KD)
+PNI$PNI <- c(scale(KPn)) #(PNI$KD-mean(PNI$KD))/sd(PNI$KD)
 
 
 # convert product column to an integer in order to modify for uniformity
@@ -209,6 +214,6 @@ write.csv(PNI, "PNI.csv")
 
 
 # insert a new regression. Y-axis is Log GDP Per Capita, X-axis is ENI.
-ENI <- merge(ENI, GDP, by.x = "Market", by.y = "Code")
+ENI <- left_join(ENI, GDP, by=c("Market"="Code"))
 new_reg_model <- lm(Log_GDP ~ ENI, data=ENI)
 summary(new_reg_model)
