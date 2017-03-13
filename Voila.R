@@ -17,7 +17,7 @@ Data <- Initial_data %>% group_by(i, hs6) %>% summarise(v=sum(v))
 # Data <- Data %>% left_join(Countries, by=c("i"="i"))
 
 #summarise trade value by country and product separately
-DataCountryTotal <- Initial_data %>% group_by(i) %>% summarise(country_v=sum(i))
+DataCountryTotal <- Initial_data %>% group_by(i) %>% summarise(country_v=sum(v))
 DataProductTotal <- Initial_data %>% group_by(hs6) %>% summarise(product_v=sum(v))
 
 # calculate total sum of emp
@@ -42,11 +42,13 @@ KP0andKC0[, 2:ncol(KP0andKC0)] <- ifelse(KP0andKC0[, 2:ncol(KP0andKC0)]>0.75, 1,
 
 # calculate KP0 and KC0
 KPn_prev <- apply(KP0andKC0[, 2:ncol(KP0andKC0)], 2, sum)
+KPn_minus2 <- KPn_prev
 KCn_prev <- apply(KP0andKC0[, 2:ncol(KP0andKC0)], 1, sum)
+KCn_minus2 <- KCn_prev
 
 #run loop
 count <- 0
-while (count<20) { # max number of times
+while (count<50) { # max number of times
   count <- count+1
   
   # calculate KC(n)
@@ -57,18 +59,21 @@ while (count<20) { # max number of times
   
   # calculate KP(n)
   KPn <- KP0andKC0
-  KPn[, 3:ncol(KPn)] <- sweep(KP0andKC0[, 3:ncol(KP0andKC0)], 1, KCn_prev, `*`)
-  KPn <- apply(KPn[, 3:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+  KPn[, 2:ncol(KPn)] <- sweep(KP0andKC0[, 2:ncol(KP0andKC0)], 1, KCn_prev, `*`)
+  KPn <- apply(KPn[, 2:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
   # calculate average KP(n)
   
   # stop loop if delta in all KCn and KPn (for even iterations) has become less than 1
   if (count %% 2 == 0) {
-    if (all(abs(KCn-KCn_prev)<1) && all(abs(KPn-KPn_prev)<1)) break 
-  
-    # set new values to be previous in new loop (only when KC & KP = even)
-    KCn_prev <- KCn
-    KPn_prev <- KPn
+    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
+    KCn_minus2 <- KCn
+    KPn_minus2 <- KPn
   }
+    
+  # set new values to be previous in new loop (only when KC & KP = even)
+  KCn_prev <- KCn
+  KPn_prev <- KPn
+
 }
 print(paste0("Calculation was done ", count, " times"))
 
@@ -79,9 +84,10 @@ ECI$ECI <- (ECI$KC-mean(ECI$KC))/sd(ECI$KC)
 ECI <- ECI %>% left_join(Countries, by="i")
 
 # create PCI table
-PCI <- data.frame(product=colnames(Calc1[3:ncol(Calc1)]), stringsAsFactors=FALSE)
+PCI <- data.frame(product=colnames(Calc1[2:ncol(Calc1)]), stringsAsFactors=FALSE)
 PCI$KP <- KPn
 PCI$PCI <- (PCI$KP-mean(PCI$KP))/sd(PCI$KP)
+PCI$PCI <- PCI$PCI * -1
 
 # convert product column to an integer in order to modify for uniformity
 PCI$product <- as.integer(PCI$product)
