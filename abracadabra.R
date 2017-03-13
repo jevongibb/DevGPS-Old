@@ -9,8 +9,6 @@ library(tidyr)
 
 # set working directory (Modified code to allow user to choose working directory)
 setwd("C:/Users/Jevon/Desktop/School/Project/Data")
-##dir <- choose.dir(getwd(), "Select your working directory")
-##setwd(dir)
 
 # read input data
 Initial_data <- read.table("baci92_2014.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
@@ -111,6 +109,9 @@ Clustering <- sapply(Markets$i, function(market_num) {
 })
 Clustering <- data.frame(Market=Markets$i, Clustering=Clustering)
 
+?dist
+
+
 # combine Market Diversity, Market Centrality, and Market Clustering
 MarketData <- KC0
 colnames(MarketData) <- c("Market", "Diversity")
@@ -126,15 +127,19 @@ MarketData$MCentralityScaled <- scale(MarketData$MCentrality)
 MarketData <- merge(MarketData, GDP, by.x = "Market", by.y = "Code")
 
 # here, need to insert a regression. Y-axis is Log GDP Per Capita, X-axis is factors below. I conducted this externally. Needs to account for NA values.
-
+reg_model <- lm(Log_GDP ~ DiversityScaled+ClusteringScaled+MCentralityScaled, data=MarketData[complete.cases(MarketData), ])
+summary(reg_model)
 
 # apply coefficients from regression to create a single variable called Network
-CentralityFactor <- 0.249386559
-DiversityFactor <- 0.072504321
-ClusteringFactor <- -0.082085434
 
-MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$MCentralityScaled * CentralityFactor + MarketData$ClusteringScaled * ClusteringFactor
 
+# CentralityFactor <- 0.249386559
+# DiversityFactor <- 0.072504321
+# ClusteringFactor <- -0.082085434
+coef(reg_model)
+
+# MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$MCentralityScaled * CentralityFactor + MarketData$ClusteringScaled * ClusteringFactor
+MarketData$Network <- predict(reg_model, MarketData)
 
 ## Diversity, Centrality, Clustering section ends.
 ## Return to calculating Economic Network Index and Product Network Index.
@@ -145,6 +150,7 @@ MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$
 # KCn_prev <- KC0$Count
 # KCn_minus2 <- KC0$Count
 KCn <- MarketData$Network
+KCn_minus2 <- MarketData$Network
 
 
 #run loop ## still trying to understand eigenvector alternative
@@ -155,18 +161,18 @@ while (count<50) { # max number of times
   KPn <- Template
   KPn[, 2:ncol(KPn)] <- sweep(Template[, 2:ncol(Template)], 1, KCn, `*`)
   KPn <- apply(KPn[, 2:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+  if (count==1) KPn_minus2 <- KPn
   
   # stop loop if delta in all KCn and KDn (for even iterations) has become less than 1
   if (count %% 2 == 0) {
     if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
     KCn_minus2 <- KCn
     KDn_minus2 <- KPn
-
   }
   
   # set new values to be previous in new loop
-  KCn_prev <- KCn
-  KPn_prev <- KPn
+  #KCn_prev <- KCn
+  #KPn_prev <- KPn
       
   count <- count+1
   
@@ -204,3 +210,6 @@ write.csv(PNI, "PNI.csv")
 
 
 # insert a new regression. Y-axis is Log GDP Per Capita, X-axis is ENI.
+ENI <- merge(ENI, GDP, by.x = "Market", by.y = "Code")
+new_reg_model <- lm(Log_GDP ~ ENI, data=ENI)
+summary(new_reg_model)
