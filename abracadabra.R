@@ -9,8 +9,6 @@ library(tidyr)
 
 # set working directory (Modified code to allow user to choose working directory)
 setwd("C:/Users/Jevon/Desktop/School/Project/Data")
-##dir <- choose.dir(getwd(), "Select your working directory")
-##setwd(dir)
 
 # read input data
 Initial_data <- read.table("baci92_2014.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
@@ -30,31 +28,34 @@ DataProductTotal <- Data %>% group_by(Product) %>% summarise(ProductTotal=sum(Qu
 # calculate total sum of quantity
 GrandTotal <- sum(DataProductTotal$ProductTotal)
 
-# create data frame for calculating RCA, Diversity (KC0), and Ubiquity (KP0)
+# create data frame for calculating Relative Comparative Advantage (RCA)
 Calc1 <- Data
 Calc1 <- Calc1 %>% left_join(DataMarketTotal, by=c("Market"="Market"))
 Calc1 <- Calc1 %>% left_join(DataProductTotal, by=c("Product"="Product"))
 
-# calculate Relative Comparative Advantage (RCA)
+# calculate RCA
 Calc1$RCA <- (Calc1$Quantity/Calc1$MarketTotal)/(Calc1$ProductTotal/GrandTotal)
 Calc1$RCA[is.na(Calc1$RCA)] <- 0
 Calc1$Quantity <- Calc1$MarketTotal <- Calc1$ProductTotal <- NULL
 
-
-# Attempting to get rid of this Binary Analysis
 # convert RCA to Binary Analysis, using 0.75 as threshhold. Create Calc2 to preserve RCA in Calc1.
+# Will use delta in RCA to calculate a market's Heat at later stage.
 Calc2 <- Calc1
 Calc2$Binary <- ifelse(Calc1$RCA>0.75, 1, 0)
 Calc2$RCA <- NULL # Removing this row reduces file size, which is necessary later
 
-# calculate KC0 and KP0
+# calculate KC0 and KP0 (old approach for ECI/PCI)
 KC0 <- Calc2 %>% group_by(Market) %>% summarise(Count = sum(Binary))
 KP0 <- Calc2 %>% group_by(Product) %>% summarise(ProductCount = sum(Binary))
-
-## This section creates Proximity and Density
 Calc2 <- Calc2 %>% ungroup() # This fixes a bug. Somehow the section above created a problem.
 
-# prepare matrix for proximity calculation
+# Convert Calc2 into matrix for multiple uses below
+Template <- spread(Calc2, Product, Binary, fill=0)
+
+# new approach calculating Market Diversity, Product Centrality, Market Centrality, and Market Clustering
+Diversity <- KC0
+
+# prepare matrix for Proximity calculation
 Calc2_matrix <- spread(Calc2, Product, Binary, fill=0)
 row.names(Calc2_matrix) <- Calc2_matrix$Market
 Calc2_matrix$Market <- NULL
@@ -83,18 +84,34 @@ combs$n1 <- combs$n2 <- NULL
 combs$product1 <- as.integer(combs$product1)
 combs$product2 <- as.integer(combs$product2)
 
-# Calculate Density
-Density <- rbind(combs %>% group_by(product1) %>% summarise(Density=sum(prox)),
-combs %>% group_by(product2) %>% summarise(Density=sum(prox)) %>% rename(product1=product2)) %>%
-group_by(product1) %>% summarise(Density=sum(Density)) %>% ungroup()
-Density$Density <- Density$Density/(nrow(Density)-1)
-colnames(Density) <- c("Product", "Density")
+# calculate Product Centrality
+PCentrality <- rbind(combs %>% group_by(product1) %>% summarise(PCentrality=sum(prox)),
+combs %>% group_by(product2) %>% summarise(PCentrality=sum(prox)) %>% rename(product1=product2)) %>%
+group_by(product1) %>% summarise(PCentrality=sum(PCentrality)) %>% ungroup()
+PCentrality$PCentrality <- PCentrality$PCentrality/(nrow(PCentrality)-1)
+colnames(PCentrality) <- c("Product", "PCentrality")
 
-## Proximity/Density section ends.
+# calculate Market Centrality
+MCentrality <- Template
+MCentrality[, 2:ncol(MCentrality)] <- sweep(Template[, 2:ncol(Template)], 2, PCentrality$PCentrality, '*')
+MCentrality <- apply(MCentrality[, 2:ncol(MCentrality)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+
+# calculate Market Clustering
+Clustering <- sapply(Markets$i, function(market_num) {
+  market_products <- Calc2$Product[Calc2$Market==market_num & Calc2$Binary==1]
+  market_combs <- combs[combs$product1 %in% market_products & combs$product2 %in% market_products, ]
+  mean(market_combs$prox)
+})
+Clustering <- data.frame(Market=Markets$i, Clustering=Clustering)
+
+# combine Market Diversity, Market Centrality, and Market Clustering
+MarketData <- KC0
+colnames(MarketData) <- c("Market", "Diversity")
+MarketData <- left_join(MarketData, Clustering, by="Market")
+MarketData$MCentrality <- MCentrality
+
+## Diversity, Centrality, Clustering section ends.
 ## Return to calculating Economic Network Index and Product Network Index.
-
-# create matrix template for below
-Template <- spread(Calc2, Product, Binary, fill=0)
 
 # save KD0 and KC0 for calculations below
 KDn_prev <- Density$Density
