@@ -7,8 +7,10 @@ library(dplyr)
 # load tidyr package for formatting functionality (like spread function)
 library(tidyr)
 
-# set working directory
+# set working directory (Modified code to allow user to choose working directory)
 setwd("C:/Users/Jevon/Desktop/School/Project/Data")
+##dir <- choose.dir(getwd(), "Select your working directory")
+##setwd(dir)
 
 # read input data
 Initial_data <- read.table("baci92_2014.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
@@ -38,6 +40,8 @@ Calc1$RCA <- (Calc1$Quantity/Calc1$MarketTotal)/(Calc1$ProductTotal/GrandTotal)
 Calc1$RCA[is.na(Calc1$RCA)] <- 0
 Calc1$Quantity <- Calc1$MarketTotal <- Calc1$ProductTotal <- NULL
 
+
+# Attempting to get rid of this Binary Analysis
 # convert RCA to Binary Analysis, using 0.75 as threshhold. Create Calc2 to preserve RCA in Calc1.
 Calc2 <- Calc1
 Calc2$Binary <- ifelse(Calc1$RCA>0.75, 1, 0)
@@ -79,35 +83,26 @@ combs$n1 <- combs$n2 <- NULL
 combs$product1 <- as.integer(combs$product1)
 combs$product2 <- as.integer(combs$product2)
 
-# duplicate combinations
-combs2 <- combs
-combs2$product1 <- combs$product2
-combs2$product2 <- combs$product1
+# Calculate Density
+Density <- rbind(combs %>% group_by(product1) %>% summarise(Density=sum(prox)),
+combs %>% group_by(product2) %>% summarise(Density=sum(prox)) %>% rename(product1=product2)) %>%
+group_by(product1) %>% summarise(Density=sum(Density)) %>% ungroup()
+Density$Density <- Density$Density/(nrow(Density)-1)
+colnames(Density) <- c("Product", "Density")
 
-## CODE BREAKS HERE
-combs2 <- rbind(combs, combs2)
-##
-
-
-# sort matrix by product1 column
-combs2 <- combs2[order(combs2$product1),]
-
-# convert Proximity to Density
-Density <- combs2 %>% group_by(product1) %>% summarise(Density=mean(prox))
-
-## Proximity section ends.
+## Proximity/Density section ends.
 ## Return to calculating Economic Network Index and Product Network Index.
 
 # create matrix template for below
 Template <- spread(Calc2, Product, Binary, fill=0)
 
 # save KD0 and KC0 for calculations below
-KDn_prev <- Density$Product1
-KDn_minus2 <- Density$Product1
+KDn_prev <- Density$Density
+KDn_minus2 <- Density$Density
 KCn_prev <- KC0$Count
 KCn_minus2 <- KC0$Count
 
-#run loop ## consider eigenvector command instead, use p.24 of the doc sent by Mohammed
+#run loop ## still trying to understand eigenvector alternative
 count <- 0
 while (count<50) { # max number of times
   count <- count+1
@@ -125,27 +120,27 @@ while (count<50) { # max number of times
   # stop loop if delta in all KCn and KDn (for even iterations) has become less than 1
   if (count %% 2 == 0) {
     if (all(abs(KCn-KCn_minus2)<1) && all(abs(KDn-KDn_minus2)<1)) break 
+    KCn_minus2 <- KCn
     KDn_minus2 <- KDn
-    KPn_minus2 <- KPn
   }
     
-  # set new values to be previous in new loop (only when KC & KP = even)
+  # set new values to be previous in new loop
+  KCn_prev <- KCn
   KDn_prev <- KDn
-  KPn_prev <- KPn
 
 }
 print(paste0("Calculation was done ", count, " times"))
 
 
 # create ENI table
-ENI <- Calc2[, 1:1]
+ENI <- Template[, 1:1]
 ENI$KC <- KCn
 ENI$ENI <- (ENI$KC-mean(ENI$KC))/sd(ENI$KC)
 ENI$Market <- as.integer(ENI$Market)
 ENI <- merge(ENI, Markets, by.x = "Market", by.y = "i")
 
 # create PCI table
-PNI <- data.frame(product=colnames(Calc2[2:ncol(Calc2)]), stringsAsFactors=FALSE)
+PNI <- data.frame(product=colnames(Template[2:ncol(Template)]), stringsAsFactors=FALSE)
 PNI$KD <- KDn
 PNI$PNI <- (PNI$KD-mean(PNI$KD))/sd(PNI$KD)
 ## No longer makes sense. PNI$PNI <- PCI$PCI * -1
@@ -154,8 +149,8 @@ PNI$PNI <- (PNI$KD-mean(PNI$KD))/sd(PNI$KD)
 PNI$product <- as.integer(PNI$product)
 PNI$product <- formatC(PNI$product, width = 6, format = "d", flag = "0")
 
-PNI <- semi_join(PNI, Products2, by=c("product"="CODE"))
+PNI <- left_join(PNI, Products, by=c("product"="CODE"))
 
 # write ECI and PCI to a CSV for export
-write.csv(ECI, "ECI.csv")
-write.csv(PCI, "PCI.csv")
+write.csv(ENI, "ENI.csv")
+write.csv(PNI, "PNI.csv")
