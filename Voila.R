@@ -28,17 +28,38 @@ Calc1 <- Data
 Calc1 <- Calc1 %>% left_join(DataCountryTotal, by=c("i"="i"))
 Calc1 <- Calc1 %>% left_join(DataProductTotal, by=c("hs6"="hs6"))
 
-# apply formula to calculate RCA
+# Calculate Relative Comparative Advantage (RCA)
 Calc1$RCA <- (Calc1$v/Calc1$country_v)/(Calc1$product_v/GrandTotal)
 Calc1$RCA[is.na(Calc1$RCA)] <- 0
 Calc1$v <- Calc1$country_v <- Calc1$product_v <- NULL
 
-# convert Calc1 to wide format
-Calc1 <- spread(Calc1, hs6, RCA, fill=0)
+# Convert RCA to Binary Analysis, using 0.75 as threshhold
+Calc2 <- Calc1
+Calc2$Binary <- ifelse(Calc1$RCA>0.75, 1, 0)
+Calc2$RCA <- NULL # Removing this row reduces file size, which is necessary later
 
-# create data frame for KP0 and KC0, using 0.75 as threshhold
-KP0andKC0 <- Calc1
-KP0andKC0[, 2:ncol(KP0andKC0)] <- ifelse(KP0andKC0[, 2:ncol(KP0andKC0)]>0.75, 1, 0)
+# Save KP0 in order to calculate Proximity and Distance
+KP0 <- Calc2 %>% group_by(hs6) %>% summarise(ProductCount = sum(Binary))
+
+# Calculate Number of Areas with Both Products
+
+KPand <- function(Calc2){
+    combs  <- combn(unique(Calc2$hs6),2)
+    mkts   <- unique(as.vector(Calc2$i))
+    counts <- rep(0,nrow(combs))
+    for(j in 1:ncol(combs)){
+        for(i in seq_along(mkts)){
+            counts[j] <- counts[j] + (sum(Calc2[Calc2$i==mkts[i] & Calc2$hs6 %in% combs[,j], 'Binary'])==2)
+        }
+    }
+    rbind(combs,counts)
+}
+
+# convert Calc2 to wide format
+Calc2 <- spread(Calc2, hs6, Binary, fill=0)
+
+# create data frame for KP0 and KC0
+KP0andKC0 <- Calc2
 
 # calculate KP0 and KC0
 KPn_prev <- apply(KP0andKC0[, 2:ncol(KP0andKC0)], 2, sum)
@@ -55,13 +76,11 @@ while (count<50) { # max number of times
   KCn <- KP0andKC0
   KCn[, 2:ncol(KCn)] <- sweep(KP0andKC0[, 2:ncol(KP0andKC0)], 2, KPn_prev, `*`)
   KCn <- apply(KCn[, 2:ncol(KCn)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
-  # calculate average KC(n)
   
   # calculate KP(n)
   KPn <- KP0andKC0
   KPn[, 2:ncol(KPn)] <- sweep(KP0andKC0[, 2:ncol(KP0andKC0)], 1, KCn_prev, `*`)
   KPn <- apply(KPn[, 2:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
-  # calculate average KP(n)
   
   # stop loop if delta in all KCn and KPn (for even iterations) has become less than 1
   if (count %% 2 == 0) {
