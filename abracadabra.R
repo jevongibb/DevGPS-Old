@@ -101,92 +101,61 @@ MCentrality <- Template
 MCentrality[, 2:ncol(MCentrality)] <- sweep(Template[, 2:ncol(Template)], 2, PCentrality$PCentrality, '*')
 MCentrality <- apply(MCentrality[, 2:ncol(MCentrality)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
 
-# calculate Product Clustering (by product, number of products with prox > average)
-aveProx <- mean(combs$prox)
-PClustering <- rbind(combs %>% group_by(product1) %>% summarise(PClustering=sum(prox > aveProx)),
-combs %>% group_by(product2) %>% summarise(PClustering=sum(prox > aveProx)) %>% rename(product1=product2)) %>%
-group_by(product1) %>% summarise(PClustering=sum(PClustering)) %>% ungroup()
-PClustering$PClustering <- scale(PClustering$PClustering)
-colnames(PCentrality) <- c("Product", "PClustering")
-
-# calculate Market Clustering (multiply PClustering by RCA)
-MClustering <- Template
-MClustering[, 2:ncol(MClustering)] <- sweep(Template[, 2:ncol(Template)], 2, PClustering$PClustering, '*')
-MClustering <- apply(MClustering[, 2:ncol(MClustering)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
-
-# combine Market Diversity, Market Centrality, and Market Clustering
+# combine Market Diversity, Market Centrality
 MarketData <- KC0
 colnames(MarketData) <- c("Market", "Diversity")
-MarketData <- left_join(MarketData, Clustering, by="Market")
 MarketData$MCentrality <- MCentrality
 
 # Scale the MarketData
 MarketData$DiversityScaled <- c(scale(MarketData$Diversity))
-MarketData$ClusteringScaled <- c(scale(MarketData$Clustering))
 MarketData$MCentralityScaled <- c(scale(MarketData$MCentrality))
 
 # Add GDP Per Capita data to the Markets
-#MarketData <- merge(MarketData, GDP, by.x = "Market", by.y = "Code")
 MarketData <- left_join(MarketData, GDP, by=c("Market"="Code"))
 
 # here, need to insert a regression. Y-axis is Log GDP Per Capita, X-axis is factors below. I conducted this externally. Needs to account for NA values.
-reg_model <- lm(Log_GDP ~ DiversityScaled+ClusteringScaled+MCentralityScaled, data=MarketData[complete.cases(MarketData), ])
+reg_model <- lm(Log_GDP ~ DiversityScaled+MCentralityScaled, data=MarketData[complete.cases(MarketData), ])
 summary(reg_model)
 
-# apply coefficients from regression to create a single variable called Network
 
-
-# CentralityFactor <- 0.249386559
-# DiversityFactor <- 0.072504321
-# ClusteringFactor <- -0.082085434
-coef(reg_model)
-
-# MarketData$Network <- MarketData$DiversityScaled * DiversityFactor + MarketData$MCentralityScaled * CentralityFactor + MarketData$ClusteringScaled * ClusteringFactor
-MarketData$Network <- predict(reg_model, MarketData)
-
-## Diversity, Centrality, Clustering section ends.
-## Return to calculating Economic Network Index and Product Network Index.
 
 # save KD0 and KC0 for calculations below
-# KDn_prev <- Density$Density
-# KDn_minus2 <- Density$Density
-# KCn_prev <- KC0$Count
-# KCn_minus2 <- KC0$Count
-KCn <- MarketData$Network
-KCn[is.na(KCn)] <- 0
-KCn_minus2 <- KCn
+KCn_prev <- MarketData$MCentrality
+KCn_minus2 <- MarketData$MCentrality
+KPn_prev <- PCentrality$PCentrality
+KPn_minus2 <- PCentrality$PCentrality
+
 
 
 #run loop ## still trying to understand eigenvector alternative
-count <- 1
-while (count<50) { # max number of times
-  
-  # calculate KD(n)
-  KPn <- Template
-  KPn[, 2:ncol(KPn)] <- sweep(Template[, 2:ncol(Template)], 1, KCn, `*`)
-  KPn <- apply(KPn[, 2:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
-  if (count==1) KPn_minus2 <- KPn
-  
-  # stop loop if delta in all KCn and KDn (for even iterations) has become less than 1
-  if (count %% 2 == 0) {
-    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
-    KCn_minus2 <- KCn
-    KDn_minus2 <- KPn
-  }
-  
-  # set new values to be previous in new loop
-  #KCn_prev <- KCn
-  #KPn_prev <- KPn
-      
+count <- 0
+while (count<14) { # max number of times
   count <- count+1
   
   # calculate KC(n)
   KCn <- Template
-  KCn[, 2:ncol(KCn)] <- sweep(Template[, 2:ncol(Template)], 2, KPn, `*`)
+  KCn[, 2:ncol(KCn)] <- sweep(Template[, 2:ncol(Template)], 2, KPn_prev, `*`)
   KCn <- apply(KCn[, 2:ncol(KCn)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+  
+  # calculate KP(n)
+  KPn <- Template
+  KPn[, 2:ncol(KPn)] <- sweep(Template[, 2:ncol(Template)], 1, KCn_prev, `*`)
+  KPn <- apply(KPn[, 2:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+  
+#  # stop loop if delta in all KCn and KPn (for even iterations) has become less than 1
+#  if (count %% 2 == 0) {
+#    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
+#    KCn_minus2 <- KCn
+#    KPn_minus2 <- KPn
+#  }
+    
+  # set new values to be previous in new loop
+  KCn_prev <- KCn
+  KPn_prev <- KPn
 
 }
 print(paste0("Calculation was done ", count, " times"))
+
 
 
 # create ENI table
