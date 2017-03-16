@@ -9,19 +9,18 @@ library(tidyr)
 setwd("C:/Users/Jevon/Desktop/DevGPS/Data")
 
 # read input data
-Initial_data <- read.table("baci92_2014.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
-Markets <- read.table("country_code_baci92.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
-Products <- read.table("product_code_baci92.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
-GDP <- read.table("GDPPerCapita.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+Initial_data <- read.table("cbp14msa.txt", header=TRUE, sep=",", stringsAsFactors=FALSE)
+Markets <- read.table("Cities.txt", header=TRUE, sep=";", quote="\"", stringsAsFactors=FALSE)
+Products <- read.table("NAICS.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+GDP <- read.table("GDPPerCapita.csv", header=TRUE, sep=",", stringsAsFactors=FALSE, check.names = FALSE)
 
 # summarise input data by products, markets, and quantifying data
-Data <- Initial_data %>% group_by(i, hs6) %>% summarise(v=sum(v))
+Data <- Initial_data %>% group_by(msa, naics) %>% summarise(emp=sum(emp))
 
 # rename columns on Data
 colnames(Data) <- c("Market", "Product", "Quantity")
 
 # modify GDP data
-colnames(GDP) <- c("Code", "Country", "GDP")
 GDP$Log_GDP <- log10(GDP$GDP)
 
 # summarise trade value by country and product separately
@@ -91,8 +90,8 @@ combs$prox <- combs$comb/combs$max
 
 # remove unnecessary columns
 combs$n1 <- combs$n2 <- NULL
-combs$product1 <- as.integer(combs$product1)
-combs$product2 <- as.integer(combs$product2)
+#combs$product1 <- as.integer(combs$product1) ## NAs introduced. Testing whether this is necessary.
+#combs$product2 <- as.integer(combs$product2)
 
 # calculate Product Centrality (sum of all prox / number of products)
 PCentrality <- rbind(combs %>% group_by(product1) %>% summarise(PCentrality=sum(prox)),
@@ -101,10 +100,11 @@ group_by(product1) %>% summarise(PCentrality=sum(PCentrality)) %>% ungroup()
 PCentrality$PCentrality <- PCentrality$PCentrality/(nrow(PCentrality)-1)
 colnames(PCentrality) <- c("Product", "PCentrality")
 
+## Removed this section because Market Centrality no longer used.
 # calculate Market Centrality (multiply PCentrality by RCA)
-MCentrality <- Template
-MCentrality[, 2:ncol(MCentrality)] <- sweep(Template[, 2:ncol(Template)], 2, PCentrality$PCentrality, '*')
-MCentrality <- apply(MCentrality[, 2:ncol(MCentrality)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+# MCentrality <- Template
+# MCentrality[, 2:ncol(MCentrality)] <- sweep(Template[, 2:ncol(Template)], 2, PCentrality$PCentrality, '*')
+# MCentrality <- apply(MCentrality[, 2:ncol(MCentrality)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
 
 
 # save KC0 and KP0 for calculations below
@@ -149,7 +149,7 @@ ENI <- Template[, 1:1]
 ENI$KC <- KCn
 ENI$ENI <- c(scale(KCn))
 ENI$Market <- as.integer(ENI$Market)
-ENI <- merge(ENI, Markets, by.x = "Market", by.y = "i")
+ENI <- merge(ENI, Markets, by.x = "Market", by.y = "Code")
 
 # create PCI table
 PNI <- data.frame(product=colnames(Template[2:ncol(Template)]), stringsAsFactors=FALSE)
@@ -158,17 +158,17 @@ PNI$PNI <- c(scale(KPn)) #(PNI$KD-mean(PNI$KD))/sd(PNI$KD)
 
 
 # convert product column to an integer in order to modify for uniformity
-PNI$product <- as.integer(PNI$product)
-PNI$product <- formatC(PNI$product, width = 6, format = "d", flag = "0")
+# PNI$product <- as.integer(PNI$product)
+# PNI$product <- formatC(PNI$product, width = 6, format = "d", flag = "0")
 
-PNI <- left_join(PNI, Products, by=c("product"="CODE"))
+PNI <- left_join(PNI, Products, by=c("product"="Code"))
 
 # write ECI and PCI to a CSV for export
-# write.csv(ENI, "ENI.csv")
-# write.csv(PNI, "PNI.csv")
+write.csv(ENI, "ENI.csv")
+write.csv(PNI, "PNI.csv")
 
 
 # test correlation with Log GDP per capita
-ENI <- left_join(ENI, GDP, by=c("Market"="Code"))
+ENI <- left_join(ENI, GDP, by=c("Market"="MSA"))
 new_reg_model <- lm(Log_GDP ~ ENI, data=ENI)
 summary(new_reg_model)
