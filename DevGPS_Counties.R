@@ -1,37 +1,39 @@
 # turn off scientific notation
 options(scipen=999)
 
-# load dplyr and tidyr package for data manipulation functionality (matrix calcs)
+# load dplyr, tidyr, reshape2 package for data manipulation functionality (matrix calcs)
 library(dplyr)
 library(tidyr)
+library(reshape2)
 
 # set working directory
 setwd("C:/Users/Jevon/Desktop/DevGPS/Data")
 
 # read input data
-Initial_data <- read.table("cbp14co.txt", header=TRUE, sep=",", stringsAsFactors=FALSE)
+Initial_data <- read.table("cbp05co.txt", header=TRUE, sep=",", stringsAsFactors=FALSE)
 Regions <- read.table("Counties.txt", header=TRUE, sep=",", quote="\"", stringsAsFactors=FALSE)
 Industries <- read.table("NAICS.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
-
-# Load GDP data and add Log GDP
 GDP <- read.table("2014gdpcounty.csv", header=TRUE, sep=",", stringsAsFactors=FALSE, check.names = FALSE)
-GDP$PI <- as.integer(GDP$PI) #NAs will get introduced. Data initiates w/ NAs.
-GDP$Log_GDP <- log10(GDP$PI)
 
 # modify Input and Markets data to combine State/City into single value
-# 2015 is different format (ALLCAPS)
-Initial_data$Code <- Initial_data$fipstate*1000+Initial_data$fipscty
+Initial_data$Code <- Initial_data$fipstate*1000+Initial_data$fipscty # 2015 uses ALLCAPS
 Regions$Code <- Regions$fipstate*1000+Regions$fipscty
+Regions$fipstate <- Regions$fipscty <- NULL
+colnames(Regions) <- c("Region", "Code")
 
 # summarise input data by products, markets, and quantifying data
-Data <- Initial_data %>% group_by(Code, naics) %>% summarise(emp=sum(emp))
+Data <- Initial_data %>% group_by(Code, naics) %>% summarise(emp=sum(emp)) # 2015 ALLCAPS
 
 # rename columns on Data
 colnames(Data) <- c("Region", "Industry", "Quantity")
 
-## Remove all codes with less than 6 digits
-Data <- Data[ grep("/", Data$Industry, invert = TRUE),]
-Data <- Data[ grep("-", Data$Industry, invert = TRUE),]
+# remove statewide entries
+Data <- Data[ grep("999", Data$Region, invert = TRUE),]
+Regions <- Regions[ grep("999", Regions$Code, invert = TRUE),]
+
+# modify GDP data
+GDP$PI <- as.integer(GDP$PI) #NAs will get introduced. Data initiates w/ NAs.
+GDP$Log_GDP <- log10(GDP$PI)
 
 # summarise trade value by country and product separately
 DataRegionTotal <- Data %>% group_by(Region) %>% summarise(RegionTotal=sum(Quantity))
@@ -40,7 +42,7 @@ DataIndustryTotal <- Data %>% group_by(Industry) %>% summarise(IndustryTotal=sum
 # calculate total sum of quantity
 GrandTotal <- sum(DataIndustryTotal$IndustryTotal)
 
-# create data frame for calculating Relative Activity (RA)
+# create data frame for calculating Relative Comparative Advantage (RCA)
 Calc1 <- Data
 Calc1 <- Calc1 %>% left_join(DataRegionTotal, by=c("Region"="Region"))
 Calc1 <- Calc1 %>% left_join(DataIndustryTotal, by=c("Industry"="Industry"))
@@ -50,15 +52,37 @@ Calc1$RA <- (Calc1$Quantity/Calc1$RegionTotal)/(Calc1$IndustryTotal/GrandTotal)
 Calc1$RA[is.na(Calc1$RA)] <- 0
 Calc1$Quantity <- Calc1$RegionTotal <- Calc1$IndustryTotal <- NULL
 
+# calculate KC0 and KP0
+KC0 <- Calc1 %>% group_by(Region) %>% summarise(Count = sum(RA))
+KP0 <- Calc1 %>% group_by(Industry) %>% summarise(Count = sum(RA))
+Calc1 <- Calc1 %>% ungroup() # Must ungroup after grouping in the two lines above
+
+Filtered <- spread(Calc1, Industry, RA, fill=0)
+
+# new filter for county-level analysis to remove the small producers that skew data
+Filtered$RA <- KC0$Count # Add RA column to Template in order to filter
+filter_metric <- 80 # Use this to set the level for filtering. If 80, then you remove the 20% with lowest RCA.
+Filtered <- subset(Filtered, RA > quantile(RA, prob = 1 - filter_metric/100)) # Filters. The number of observations should go down by (1-filter_metric).
+Filtered$RA <- NULL # Remove RCA column
+Filtered <- melt(Filtered, id = "Region")
+colnames(Filtered) <- c("Region", "Industry", "RA")
+Filtered <- Filtered[order(Filtered$Region),]
+rownames(Filtered) <- NULL
+KC0 <- Filtered %>% group_by(Region) %>% summarise(Count = sum(RA))
+KP0 <- Filtered %>% group_by(Industry) %>% summarise(Count = sum(RA))
+Filtered <- Filtered %>% ungroup() # Must ungroup after grouping in the two lines above
+
 # convert RA to Binary Analysis, using 0.75 as threshhold
 # create Calc2 to preserve RA in Calc1
 # will use delta in RA to calculate a market's Heat at later stage
-Calc2 <- Calc1
-Calc2$Binary <- ifelse(Calc1$RA>0.75, 1, 0)
+#Calc2 <- Filtered
+Calc2 <- Filtered
+Calc2$Binary <- ifelse(Calc2$RA>0.75, 1, 0)
 Calc2$RA <- NULL # Removing this row reduces file size, which is necessary later
 
 # Convert Calc2 into matrix for multiple uses below
 Template <- spread(Calc2, Industry, Binary, fill=0)
+
 
 # convert Template to matrix for matrix math
 M <- as.matrix(Template)
