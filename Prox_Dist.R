@@ -17,7 +17,8 @@ combs_matrix$industry1 <- rownames(combs_matrix)
 combs <- gather(combs_matrix, industry2, comb, -industry1)
 
 # remove duplicated records
-combs <- combs[combs$industry1 < combs$industry2, ]
+## THIS WAS INITIALLY DONE FOR EFFICIENCY, BUT IT CAUSES AN ERROR WHEN CALCULATING DISTANCE
+#combs <- combs[combs$industry1 < combs$industry2, ]
 
 # calcuate max number of markets and proximity
 industry_number_of_markets <- colSums(Calc2_matrix)
@@ -29,8 +30,8 @@ combs$prox[is.na(combs$prox)] <- 0
 
 # remove unnecessary columns
 combs$n1 <- combs$n2 <- NULL
-#combs$product1 <- as.integer(combs$product1) ## NAs introduced. Testing whether this is necessary.
-#combs$product2 <- as.integer(combs$product2)
+#combs$product1 <- as.integer(combs$product1) ## Removed this because it did not seem necessary. 
+#combs$product2 <- as.integer(combs$product2) ## Removed this because it did not seem necessary.
 
 # calculate industries' Centrality (sum of all prox / number of products)
 Centrality <- rbind(combs %>% group_by(industry1) %>% summarise(Centrality=sum(prox)),
@@ -59,6 +60,7 @@ Centrality$Centrality <- normalize(Centrality$Centrality)
 
 Template <- spread(Calc2, Industry, Binary, fill=0)
 Distance <- Template
+
 #convert to long format (the variable will be called CalcDist, though it is not CalcDist yet)
 Distance <- gather(Distance, Industry, CalcDist, -Region)
 Distance <- Distance[order(Distance$Region, Distance$Industry), ]
@@ -72,12 +74,15 @@ Top50_CalcDist <- data.frame()
 for (ii in 1:N_split) {
 #create test from combs in long format - take only top 50 by proximity for every product1
 test_Top50 <- combs %>% filter(industry1 %in% industries_split[[ii]]) %>% group_by(industry1) %>% arrange(desc(prox)) %>% filter(row_number() %in% c(2:51)) %>% ungroup() %>% arrange(industry1)
+
 #extend test_Top50 with market variable - repeat test_Top50 for every region
 test_Top50_region <- test_Top50[rep(seq_len(nrow(test_Top50)), length(Template$Region)), ]
 test_Top50_region$Region <- rep(Template$Region, each=nrow(test_Top50))
+
 #for every market and product2, add CalcDist variable (=have variable in your code) from Distance (you added it from Template)
 test_Top50_region <- left_join(test_Top50_region, Distance, by=c("industry2"="Industry", "Region"="Region"))
-test_Top50_region$CalcDist[is.na(test_Top50_region$CalcDist)] <- 0
+#test_Top50_region$CalcDist[is.na(test_Top50_region$CalcDist)] <- 0
+
 #now real CalcDist may be calculated - at once for every industry1
 Top50_CalcDist <- rbind(Top50_CalcDist,
 test_Top50_region %>% group_by(industry1, Region) %>% summarise(CalcDist=sum(prox*CalcDist)/sum(prox)) %>% ungroup())
@@ -89,3 +94,5 @@ Top50_CalcDist$CalcDist[Distance$CalcDist==1] <- 1
 
 #convert to wide fomat
 Distance <- spread(Top50_CalcDist, industry1, CalcDist, fill=0)
+
+## END Distance calculations
