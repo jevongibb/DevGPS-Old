@@ -10,26 +10,44 @@ library(reshape2)
 setwd("C:/Users/Jevon/Desktop/DevGPS/Data")
 
 # read input data
-Initial_data <- read.table("cbp05co.txt", header=TRUE, sep=",", stringsAsFactors=FALSE)
-Regions <- read.table("Counties.txt", header=TRUE, sep=",", quote="\"", stringsAsFactors=FALSE)
+Initial_data <- read.table("cbp15co.txt", header=TRUE, sep=",", stringsAsFactors=FALSE)
+Regions <- read.table("Counties.csv", header=TRUE, sep=",", quote="\"", stringsAsFactors=FALSE)
 Industries <- read.table("NAICS.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
 GDP <- read.table("2014gdpcounty.csv", header=TRUE, sep=",", stringsAsFactors=FALSE, check.names = FALSE)
 
 # modify Input and Markets data to combine State/City into single value
-Initial_data$Code <- Initial_data$fipstate*1000+Initial_data$fipscty # 2015 uses ALLCAPS
-Regions$Code <- Regions$fipstate*1000+Regions$fipscty
-Regions$fipstate <- Regions$fipscty <- NULL
-colnames(Regions) <- c("Region", "Code")
+Initial_data$Code <- Initial_data[,1]*1000+Initial_data[,2] # 2015 uses ALLCAPS
 
-# summarise input data by products, markets, and quantifying data
-Data <- Initial_data %>% group_by(Code, naics) %>% summarise(emp=sum(emp)) # 2015 ALLCAPS
+#Pull relevant data from initial data
+Data <- data.frame("Region" = Initial_data$Code, 
+                  "Industry" = Initial_data[,3], 
+                  "Flag" = Initial_data[,4],
+                  "Quantity" = Initial_data[,6]) 
 
-# rename columns on Data
-colnames(Data) <- c("Region", "Industry", "Quantity")
+# Remove all NAICS codes with less than 6 digits
+Data <- Data[ grep("/", Data$Industry, invert = TRUE),]
+Data <- Data[ grep("-", Data$Industry, invert = TRUE),]
 
 # remove statewide entries
 Data <- Data[ grep("999", Data$Region, invert = TRUE),]
 Regions <- Regions[ grep("999", Regions$Code, invert = TRUE),]
+
+# Insert employment quantities for Region/NAICS combinations with Data Suppression Flags
+Data$Quantity[with(Data, Flag == "A")] <- 10
+Data$Quantity[with(Data, Flag == "B")] <- 60
+Data$Quantity[with(Data, Flag == "C")] <- 175
+Data$Quantity[with(Data, Flag == "E")] <- 375
+Data$Quantity[with(Data, Flag == "F")] <- 750
+Data$Quantity[with(Data, Flag == "G")] <- 1750
+Data$Quantity[with(Data, Flag == "H")] <- 3750
+Data$Quantity[with(Data, Flag == "I")] <- 7500
+Data$Quantity[with(Data, Flag == "J")] <- 17500
+Data$Quantity[with(Data, Flag == "K")] <- 37500
+Data$Quantity[with(Data, Flag == "L")] <- 75000
+Data$Quantity[with(Data, Flag == "M")] <- 150000
+
+# Remove Flag column from Data
+Data$Flag <- NULL
 
 # modify GDP data
 GDP$PI <- as.integer(GDP$PI) #NAs will get introduced. Data initiates w/ NAs.
@@ -86,7 +104,7 @@ Template <- spread(Calc2, Industry, Binary, fill=0)
 
 # convert Template to matrix for matrix math
 M <- as.matrix(Template)
-M<-M[,-1]
+M <- M[, -1]
 
 # Function to calculate eci and pci, this code adapted from ecipci.ado (STATA code)
 ecipci <- function(M){
@@ -122,13 +140,35 @@ KP_final <- ecipciEstimate$kp
 KC_final <- scale(KC_final)
 KP_final <- scale(KP_final)
 
-RNS <- data.frame(Template$Region, KC_final)
-colnames(RNS) <- c("Region", "RNS")
+RNS <- data.frame("Region" = Template$Region, "RNS" = KC_final)
 
 INS <- as.data.frame(colnames(Template))
 INS <- data.frame(INS[-1,])
 colnames(INS) <- "Industry"
 INS$INS <- KP_final
+
+# Merge RNS with Regions, keeping all regions (Remember Filter from earlier eliminated some)
+RNS <- merge(RNS, Regions, by="Region", all.y = TRUE)
+
+# Set all counties that got filtered to the minimum RNS generated above
+RNS$RNS[is.na(RNS$RNS)] <- min(KC_final)
+
+# Format Region Code for Tableau purposes
+RNS$Region <- formatC(RNS$Region, width = 5, format = "d", flag = "0")
+
+# Generate RA and Emp for export
+RA <- spread(Calc1, Industry, RA, fill=0)
+Emp <- spread(Data, Industry, Quantity, fill=0)
+
+# Export Data to CSV
+write.csv(RNS, "RNS_CO_2015.csv", row.names = FALSE)
+write.csv(RA, "RA_CO_2015.csv", row.names = FALSE)
+write.csv(Emp, "Emp_CO_2015.csv", row.names = FALSE)
+
+### NOTE TO SELF: If a county has ZERO activity, it might cause RA/Emp matrix to not match RNS
+### Example: King County, TX 48269 
+
+
 
 # test correlation with Log GDP per capita
 RNS2 <- left_join(RNS, GDP, by=c("Region"="GeoFips"))
