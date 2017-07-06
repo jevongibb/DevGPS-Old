@@ -10,165 +10,140 @@ setwd("C:/Users/Jevon/Desktop/DevGPS/Data")
 
 # read input data
 Initial_data <- read.table("cbp14msa.txt", header=TRUE, sep=",", stringsAsFactors=FALSE)
-Markets <- read.table("Cities.txt", header=TRUE, sep=";", quote="\"", stringsAsFactors=FALSE)
-Products <- read.table("NAICS.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
-GDP <- read.table("GDPPerCapita.csv", header=TRUE, sep=",", stringsAsFactors=FALSE, check.names = FALSE)
+# remember to load different Cities/MSAs by different Census periods ('03, '07, '12)
+Regions <- read.table("Cities_2012.csv", header=TRUE, sep=",", quote="\"", stringsAsFactors=FALSE)
+Industries <- read.table("NAICS.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+GDP <- read.table("2014_GDP_MSA.csv", header=TRUE, sep=",", stringsAsFactors=FALSE, check.names = FALSE)
 
-# summarise input data by products, markets, and quantifying data
-Data <- Initial_data %>% group_by(msa, naics) %>% summarise(emp=sum(emp))
+#Pull relevant data from initial data
+Data <- data.frame("Region" = Initial_data[,1], 
+                  "Industry" = Initial_data[,2], 
+                  "Flag" = Initial_data[,3],
+                  "Quantity" = Initial_data[,5]) 
 
-# rename columns on Data
-colnames(Data) <- c("Market", "Product", "Quantity")
+# Remove all NAICS codes with less than 6 digits
+Data <- Data[ grep("/", Data$Industry, invert = TRUE),]
+Data <- Data[ grep("-", Data$Industry, invert = TRUE),]
 
-# modify GDP data
-GDP$Log_GDP <- log10(GDP$GDP)
+# Insert employment quantities for Region/NAICS combinations with Data Suppression Flags
+Data$Quantity[with(Data, Flag == "A")] <- 10
+Data$Quantity[with(Data, Flag == "B")] <- 60
+Data$Quantity[with(Data, Flag == "C")] <- 175
+Data$Quantity[with(Data, Flag == "E")] <- 375
+Data$Quantity[with(Data, Flag == "F")] <- 750
+Data$Quantity[with(Data, Flag == "G")] <- 1750
+Data$Quantity[with(Data, Flag == "H")] <- 3750
+Data$Quantity[with(Data, Flag == "I")] <- 7500
+Data$Quantity[with(Data, Flag == "J")] <- 17500
+Data$Quantity[with(Data, Flag == "K")] <- 37500
+Data$Quantity[with(Data, Flag == "L")] <- 75000
+Data$Quantity[with(Data, Flag == "M")] <- 150000
+
+# Remove Flag column from Data
+Data$Flag <- NULL
 
 # summarise trade value by country and product separately
-DataMarketTotal <- Data %>% group_by(Market) %>% summarise(MarketTotal=sum(Quantity))
-DataProductTotal <- Data %>% group_by(Product) %>% summarise(ProductTotal=sum(Quantity))
+DataRegionTotal <- Data %>% group_by(Region) %>% summarise(RegionTotal=sum(Quantity))
+DataIndustryTotal <- Data %>% group_by(Industry) %>% summarise(IndustryTotal=sum(Quantity))
 
 # calculate total sum of quantity
-GrandTotal <- sum(DataProductTotal$ProductTotal)
+GrandTotal <- sum(DataIndustryTotal$IndustryTotal)
 
-# create data frame for calculating Relative Comparative Advantage (RCA)
+# create data frame for calculating Relative Activity (RA)
 Calc1 <- Data
-Calc1 <- Calc1 %>% left_join(DataMarketTotal, by=c("Market"="Market"))
-Calc1 <- Calc1 %>% left_join(DataProductTotal, by=c("Product"="Product"))
+Calc1 <- Calc1 %>% left_join(DataRegionTotal, by=c("Region"="Region"))
+Calc1 <- Calc1 %>% left_join(DataIndustryTotal, by=c("Industry"="Industry"))
 
-# Calc3
-Calc3 <- Calc1
-Calc3$RCA <- Calc3$Quantity/Calc3$ProductTotal
-Calc3$RCA[is.na(Calc3$RCA)] <- 0
-Calc3$Quantity <- Calc3$MarketTotal <- Calc3$ProductTotal <- NULL
+# calculate RA
+Calc1$RA <- (Calc1$Quantity/Calc1$RegionTotal)/(Calc1$IndustryTotal/GrandTotal)
+Calc1$RA[is.na(Calc1$RA)] <- 0
+Calc1$Quantity <- Calc1$RegionTotal <- Calc1$IndustryTotal <- NULL
 
-# calculate RCA
-Calc1$RCA <- (Calc1$Quantity/Calc1$MarketTotal)/(Calc1$ProductTotal/GrandTotal)
-Calc1$RCA[is.na(Calc1$RCA)] <- 0
-Calc1$Quantity <- Calc1$MarketTotal <- Calc1$ProductTotal <- NULL
-
-# convert RCA to Binary Analysis, using 0.75 as threshhold
-# create Calc2 to preserve RCA in Calc1
-# will use delta in RCA to calculate a market's Heat at later stage
+# convert RA to Binary Analysis, using 0.75 as threshhold
+# create Calc2 to preserve RA in Calc1
+# will use delta in RA to calculate a market's Heat at later stage
 Calc2 <- Calc1
-Calc2$Binary <- ifelse(Calc1$RCA>0.75, 1, 0)
-Calc2$RCA <- NULL # Removing this row reduces file size, which is necessary later
-
-# calculate KC0 and KP0
-KC0 <- Calc1 %>% group_by(Market) %>% summarise(Count = sum(RCA))
-KP0 <- Calc2 %>% group_by(Product) %>% summarise(ProductCount = sum(Binary))
-Calc2 <- Calc2 %>% ungroup() # Must ungroup after grouping in the two lines above
+Calc2$Binary <- ifelse(Calc1$RA>0.75, 1, 0)
+Calc2$RA <- NULL # Removing this row reduces file size, which is necessary later
 
 # Convert Calc2 into matrix for multiple uses below
-Template <- spread(Calc2, Product, Binary, fill=0)
+Template <- spread(Calc2, Industry, Binary, fill=0)
 
-# new approach calculating Market Diversity, Product Centrality, Market Centrality, and Market Clustering
-Diversity <- KC0
+# convert Template to matrix for matrix math
+M <- as.matrix(Template)
+M<-M[,-1]
 
-# prepare matrix for Proximity calculation
-Calc2_matrix <- spread(Calc2, Product, Binary, fill=0)
-row.names(Calc2_matrix) <- Calc2_matrix$Market
-Calc2_matrix$Market <- NULL
-Calc2_matrix <- as.matrix(Calc2_matrix)
-
-# calculate number of markets for all combinations with market multiplication
-combs_matrix <- t(Calc2_matrix)%*%Calc2_matrix
-
-# convert matrix to data.frame (long format)
-combs_matrix <- as.data.frame(combs_matrix)
-combs_matrix$product1 <- rownames(combs_matrix)
-combs <- gather(combs_matrix, product2, comb, -product1)
-
-# remove duplicated records
-combs <- combs[combs$product1 < combs$product2, ]
-
-# calcuate max number of markets and proximity
-products_number_of_markets <- colSums(Calc2_matrix)
-combs$n1 <- products_number_of_markets[as.character(combs$product1)]
-combs$n2 <- products_number_of_markets[as.character(combs$product2)]
-combs$max <- pmax(combs$n1, combs$n2)
-combs$prox <- combs$comb/combs$max
-
-# remove unnecessary columns
-combs$n1 <- combs$n2 <- NULL
-#combs$product1 <- as.integer(combs$product1) ## NAs introduced. Testing whether this is necessary.
-#combs$product2 <- as.integer(combs$product2)
-
-# calculate Product Centrality (sum of all prox / number of products)
-PCentrality <- rbind(combs %>% group_by(product1) %>% summarise(PCentrality=sum(prox)),
-combs %>% group_by(product2) %>% summarise(PCentrality=sum(prox)) %>% rename(product1=product2)) %>%
-group_by(product1) %>% summarise(PCentrality=sum(PCentrality)) %>% ungroup()
-PCentrality$PCentrality <- PCentrality$PCentrality/(nrow(PCentrality)-1)
-colnames(PCentrality) <- c("Product", "PCentrality")
-
-## Removed this section because Market Centrality no longer used.
-# calculate Market Centrality (multiply PCentrality by RCA)
-# MCentrality <- Template
-# MCentrality[, 2:ncol(MCentrality)] <- sweep(Template[, 2:ncol(Template)], 2, PCentrality$PCentrality, '*')
-# MCentrality <- apply(MCentrality[, 2:ncol(MCentrality)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
-
-
-# save KC0 and KP0 for calculations below
-KCn_prev <- KC0$Count
-KCn_minus2 <- KC0$Count
-KPn_prev <- KP0$ProductCount
-KPn_minus2 <- KP0$ProductCount
-
-#run loop ## still trying to understand eigenvector alternative
-count <- 0
-while (count<20) { # max number of times
-  count <- count+1
+# Function to calculate eci and pci, this code adapted from ecipci.ado (STATA code)
+ecipci <- function(M){
+  kc0 <- M %*% matrix(1, nrow=ncol(M), ncol=ncol(M))
+  kp0 <- matrix(1, nrow=nrow(M), ncol = nrow(M)) %*% M
+  kc0_all <- M %*% matrix(1, nrow=ncol(M), ncol=ncol(M))
   
-  # calculate KC(n)
-  KCn <- Template
-  KCn[, 2:ncol(KCn)] <- sweep(Template[, 2:ncol(Template)], 2, KPn_prev, `*`)
-  KCn <- apply(KCn[, 2:ncol(KCn)], 1, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+  tempMat <- M/kp0
+  tempMat2 <- tempMat/kc0
   
-  # calculate KP(n)
-  KPn <- Template
-  KPn[, 2:ncol(KPn)] <- sweep(Template[, 2:ncol(Template)], 1, KCn_prev, `*`)
-  KPn <- apply(KPn[, 2:ncol(KPn)], 2, function(x) { if (sum(x>0)==0) return(0) else return(mean(x[x>0])) })
+  Mptilde <- t(tempMat2) %*% M
+  Mptilde[is.na(Mptilde)] <- 0
   
-  # stop loop if delta in all KCn and KPn (for even iterations) has become less than 1
-  if (count %% 2 == 0) {
-    if (all(abs(KCn-KCn_minus2)<1) && all(abs(KPn-KPn_minus2)<1)) break 
-    KCn_minus2 <- KCn
-    KPn_minus2 <- KPn
-  }
-    
-  # set new values to be previous in new loop
-  KCn_prev <- KCn
-  KPn_prev <- KPn
-
+  eigenAnalysis <- eigen(Mptilde)
+  kp <- as.numeric(eigenAnalysis$vectors[,2])
+  kc <- (M/kc0_all) %*% kp
+  
+  kc01d <- M %*% matrix(1, nrow=ncol(M), ncol=1)
+  eigensign <- as.numeric(sign(cor(kc01d, kc)))
+  kp <- eigensign * kp
+  kc <- eigensign * kc
+  
+  out <- list(kc=kc, kp=kp)
+  return(out)
 }
-print(paste0("Calculation was done ", count, " times"))
+
+ecipciEstimate <- ecipci(M)
+
+KC_final <- ecipciEstimate$kc
+KP_final <- ecipciEstimate$kp
+
+KC_final <- scale(KC_final)
+KP_final <- scale(KP_final)
+
+RNS <- data.frame(Template$Region, KC_final)
+colnames(RNS) <- c("Region", "RNS")
+
+INS <- data.frame(Industry=as.integer(colnames(Template[2:ncol(Template)])), stringsAsFactors=FALSE)
+INS$INS <- as.numeric(KP_final)
+INS <- left_join(INS, Industries, by = c("Industry" = "NAICS"))
+
+# Create RNS, RA, and Employees for export
+RNS <- RNS %>% left_join(Regions, by = c("Region" = "Code"))
+RA <- spread(Calc1, Industry, RA, fill=0)
+Emp <- spread(Data, Industry, Quantity, fill=0)
+
+# Export Data to CSV
+write.csv(RNS, "RNS_MSA_2014.csv", row.names = FALSE)
+write.csv(RA, "RA_MSA_2014.csv", row.names = FALSE)
+write.csv(Emp, "Emp_MSA_2014.csv", row.names = FALSE)
+
+### END OF DATA GENERATION
+### FOLLOWING SECTION IS ONLY FOR ANALYSIS
 
 
 
-# create ENI table
-ENI <- Template[, 1:1]
-ENI$KC <- KCn
-ENI$ENI <- c(scale(KCn))
-ENI$Market <- as.integer(ENI$Market)
-ENI <- merge(ENI, Markets, by.x = "Market", by.y = "Code")
-
-# create PCI table
-PNI <- data.frame(product=colnames(Template[2:ncol(Template)]), stringsAsFactors=FALSE)
-PNI$KP <- KPn
-PNI$PNI <- c(scale(KPn)) #(PNI$KD-mean(PNI$KD))/sd(PNI$KD)
-
-
-# convert product column to an integer in order to modify for uniformity
-# PNI$product <- as.integer(PNI$product)
-# PNI$product <- formatC(PNI$product, width = 6, format = "d", flag = "0")
-
-PNI <- left_join(PNI, Products, by=c("product"="Code"))
-
-# write ECI and PCI to a CSV for export
-write.csv(ENI, "ENI.csv")
-write.csv(PNI, "PNI.csv")
-
+# load KC0 and Employees data to compare
+KC0 <- Calc1 %>% group_by(Region) %>% summarise(Count = sum(RA))
+Emp <- Data %>% group_by(Region) %>% summarise(Count = sum(Quantity))
 
 # test correlation with Log GDP per capita
-ENI <- left_join(ENI, GDP, by=c("Market"="MSA"))
-new_reg_model <- lm(Log_GDP ~ ENI, data=ENI)
-summary(new_reg_model)
+RNS2 <- left_join(RNS, GDP, by=c("Region"="MSA"))
+RNS2$KC0 <- KC0$Count
+RNS2$Emp <- Emp$Count
+gdp_reg_model <- lm(Log_GDP ~ RNS + Population + KC0 + Emp, data=RNS2)
+summary(gdp_reg_model)
+percapita_reg_model <- lm(Log_PerCapita ~ RNS, data=RNS2)
+summary(percapita_reg_model)
+
+library(ggplot2)
+library(plotly)
+
+colnames(RNS2)[3] <- "Name"
+mygraph <- ggplot(RNS2, aes(x = RNS, y = Log_PerCapita, label = Name)) + geom_point() + geom_smooth(method = 'lm') + labs(x="Economic Network Rating", y="Log GDP Per Capita") + xlim(-1,3.6) + ylim(4.3,5.2)
+ggplotly(mygraph)
